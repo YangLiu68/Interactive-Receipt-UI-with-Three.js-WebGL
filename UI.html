@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Interactive Receipt UI - Three.js + WebGL</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #ffffff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    .panel {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 10;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.88);
+      border: 1px solid rgba(0,0,0,0.06);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+      color: #222;
+      user-select: none;
+      pointer-events: none;
+      backdrop-filter: blur(8px);
+    }
+
+    .panel .title {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .panel .desc {
+      font-size: 12px;
+      opacity: 0.75;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <div class="title">Receipt Physics Demo</div>
+    <div class="desc">Click and drag the receipt with the left mouse button
+      <br>to observe the paper bending, folding, swaying, and springing back.</div>
+  </div>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/+esm";
+    import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js/+esm";
+
+    // ---------------------------
+    // 基础场景
+    // ---------------------------
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: "high-performance"
+    });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xffffff);
+
+    const camera = new THREE.PerspectiveCamera(
+      40,
+      window.innerWidth / window.innerHeight,
+      0.01,
+      100
+    );
+    camera.position.set(0, 0.15, 3.2);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.enablePan = false;
+    controls.target.set(0, -0.1, 0);
+    controls.minDistance = 1.8;
+    controls.maxDistance = 5.5;
+    controls.maxPolarAngle = Math.PI * 0.72;
+
+    // ---------------------------
+    // 灯光
+    // ---------------------------
+    const hemi = new THREE.HemisphereLight(0xffffff, 0xf3f3f3, 1.0);
+    scene.add(hemi);
+
+    const dir1 = new THREE.DirectionalLight(0xffffff, 1.6);
+    dir1.position.set(1.8, 2.6, 2.2);
+    dir1.castShadow = true;
+    dir1.shadow.mapSize.width = 2048;
+    dir1.shadow.mapSize.height = 2048;
+    dir1.shadow.camera.left = -3;
+    dir1.shadow.camera.right = 3;
+    dir1.shadow.camera.top = 3;
+    dir1.shadow.camera.bottom = -3;
+    dir1.shadow.bias = -0.0002;
+    scene.add(dir1);
+
+    const dir2 = new THREE.DirectionalLight(0xffffff, 0.5);
+    dir2.position.set(-1.5, 1.1, 1.5);
+    scene.add(dir2);
+
+    // 地面阴影板
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(10, 10),
+      new THREE.ShadowMaterial({ opacity: 0.14 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -1.55;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // 柔和底部白盘
+    const baseGlow = new THREE.Mesh(
+      new THREE.CircleGeometry(1.2, 64),
+      new THREE.MeshBasicMaterial({
+        color: 0xf8f8f8,
+        transparent: true,
+        opacity: 0.95
+      })
+    );
+    baseGlow.rotation.x = -Math.PI / 2;
+    baseGlow.position.set(0, -1.545, 0.08);
+    scene.add(baseGlow);
+
+    // ---------------------------
+    // 热敏纸纹理
+    // ---------------------------
+    function makeReceiptTexture() {
+      const w = 1024;
+      const h = 2048;
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+
+      ctx.fillStyle = "#faf7f1";
+      ctx.fillRect(0, 0, w, h);
+
+      // 轻微纸张噪声
+      const img = ctx.getImageData(0, 0, w, h);
+      const data = img.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const n = (Math.random() * 10) | 0;
+        data[i] = Math.max(0, data[i] - n);
+        data[i + 1] = Math.max(0, data[i + 1] - n);
+        data[i + 2] = Math.max(0, data[i + 2] - (n * 0.5));
+      }
+      ctx.putImageData(img, 0, 0);
+
+      // 细竖纹
+      for (let x = 0; x < w; x += 3) {
+        ctx.fillStyle = `rgba(40,30,20,${Math.random() * 0.012})`;
+        ctx.fillRect(x, 0, 1, h);
+      }
+
+      ctx.fillStyle = "#222";
+      ctx.textAlign = "center";
+      ctx.font = "700 54px monospace";
+      ctx.fillText("POLY MART", w / 2, 110);
+
+      ctx.font = "28px monospace";
+      ctx.fillText("Receipts, Regrets & Render Passes", w / 2, 155);
+
+      ctx.textAlign = "left";
+      ctx.font = "26px monospace";
+      ctx.fillText("TXN: #A11A5-3D", 72, 225);
+      ctx.fillText("DATE: 2026-04-03", 72, 263);
+      ctx.fillText("CASHIER: Vertex Chan", 72, 301);
+
+      dash(64, 338, w - 128);
+
+      const items = [
+        ["Normal Maps", "2", "make it pop"],
+        ["Extra Vertices", "128", "emotional support"],
+        ["Ambient Occlusion", "1", "soft guilt"],
+        ["PBR Roughness", "0.42", "artisan matte"],
+        ["Specular Highlights", "12", "panic sparkle"],
+        ["UV Islands", "7", "carefully lost"],
+        ["Bezier Curves", "3m", "organic spaghetti"],
+        ["Loop Cuts", "14", "crispy topology"],
+        ["Subdivision", "5", "laptop cries"],
+        ["Shadow Bias", "0.0003", "fight acne"],
+        ["Bloom Pass", "1", "tasteful overkill"],
+        ["Frustum Culling", "OFF", "live dangerously"],
+        ["Triangulation", "999", "serious business"],
+        ["Compression Artifacts", "FREE", "retro bonus"]
+      ];
+
+      let y = 400;
+      ctx.font = "30px monospace";
+
+      for (const [name, qty, note] of items) {
+        ctx.textAlign = "left";
+        ctx.fillStyle = "#222";
+        ctx.fillText(name, 72, y);
+
+        ctx.textAlign = "right";
+        ctx.fillText(qty, 810, y);
+        ctx.fillText("$" + (Math.random() * 90 + 4).toFixed(2), 952, y);
+
+        ctx.textAlign = "left";
+        ctx.fillStyle = "rgba(30,30,30,0.65)";
+        ctx.font = "23px monospace";
+        ctx.fillText("// " + note, 92, y + 28);
+        ctx.font = "30px monospace";
+
+        y += 92;
+      }
+
+      dash(64, y + 8, w - 128);
+
+      ctx.fillStyle = "#222";
+      ctx.font = "32px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText("SUBTOTAL", 72, y + 78);
+      ctx.textAlign = "right";
+      ctx.fillText("$1337.00", 952, y + 78);
+
+      ctx.textAlign = "left";
+      ctx.fillText("TAX", 72, y + 124);
+      ctx.textAlign = "right";
+      ctx.fillText("$42.00", 952, y + 124);
+
+      dash(64, y + 156, w - 128);
+
+      ctx.font = "700 38px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText("TOTAL", 72, y + 226);
+      ctx.textAlign = "right";
+      ctx.fillText("$1379.00", 952, y + 226);
+
+      ctx.textAlign = "center";
+      ctx.font = "28px monospace";
+      ctx.fillText("THANK YOU FOR PURCHASING TOO MANY POLYGONS", w / 2, y + 334);
+      ctx.fillText("NO RETURNS AFTER RASTERIZATION", w / 2, y + 380);
+
+      // 底部二维码感块
+      const qrX = w / 2 - 120;
+      const qrY = y + 440;
+      const s = 12;
+      ctx.fillStyle = "#222";
+      for (let gx = 0; gx < 18; gx++) {
+        for (let gy = 0; gy < 18; gy++) {
+          const corner =
+            (gx < 5 && gy < 5) ||
+            (gx > 12 && gy < 5) ||
+            (gx < 5 && gy > 12);
+          let fill = false;
+
+          if (corner) {
+            fill =
+              gx === 0 || gx === 4 ||
+              gy === 0 || gy === 4 ||
+              (gx > 0 && gx < 4 && gy > 0 && gy < 4);
+          } else {
+            fill = Math.random() > 0.57;
+          }
+
+          if (fill) {
+            ctx.fillRect(qrX + gx * s, qrY + gy * s, s, s);
+          }
+        }
+      }
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+      texture.needsUpdate = true;
+      return texture;
+
+      function dash(x, y, width) {
+        ctx.save();
+        ctx.setLineDash([10, 7]);
+        ctx.strokeStyle = "rgba(40,40,40,0.45)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + width, y);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // ---------------------------
+    // Verlet 粒子系统
+    // ---------------------------
+    class Particle {
+      constructor(x, y, z, pinned = false) {
+        this.pos = new THREE.Vector3(x, y, z);
+        this.prev = new THREE.Vector3(x, y, z);
+        this.acc = new THREE.Vector3();
+        this.pinned = pinned;
+        this.pinPos = new THREE.Vector3(x, y, z);
+      }
+
+      addForce(force) {
+        this.acc.add(force);
+      }
+
+      integrate(dtSq, damping) {
+        if (this.pinned) {
+          this.pos.copy(this.pinPos);
+          this.prev.copy(this.pinPos);
+          this.acc.set(0, 0, 0);
+          return;
+        }
+
+        const vx = (this.pos.x - this.prev.x) * damping;
+        const vy = (this.pos.y - this.prev.y) * damping;
+        const vz = (this.pos.z - this.prev.z) * damping;
+
+        const px = this.pos.x;
+        const py = this.pos.y;
+        const pz = this.pos.z;
+
+        this.pos.x += vx + this.acc.x * dtSq;
+        this.pos.y += vy + this.acc.y * dtSq;
+        this.pos.z += vz + this.acc.z * dtSq;
+
+        this.prev.set(px, py, pz);
+        this.acc.set(0, 0, 0);
+      }
+    }
+
+    class Constraint {
+      constructor(a, b, rest, stiffness) {
+        this.a = a;
+        this.b = b;
+        this.rest = rest;
+        this.stiffness = stiffness;
+      }
+
+      solve() {
+        const delta = new THREE.Vector3().subVectors(this.b.pos, this.a.pos);
+        const dist = delta.length();
+        if (dist < 1e-8) return;
+
+        const diff = (dist - this.rest) / dist;
+        const correction = delta.multiplyScalar(0.5 * this.stiffness * diff);
+
+        if (!this.a.pinned) this.a.pos.add(correction);
+        if (!this.b.pinned) this.b.pos.sub(correction);
+      }
+    }
+
+    const receiptWidth = 0.92;
+    const receiptHeight = 2.28;
+    const cols = 18;
+    const rows = 44;
+
+    const particles = [];
+    const constraints = [];
+
+    const originX = -receiptWidth / 2;
+    const originY = 1.08;
+    const originZ = 0;
+
+    function idx(u, v) {
+      return v * (cols + 1) + u;
+    }
+
+    for (let v = 0; v <= rows; v++) {
+      for (let u = 0; u <= cols; u++) {
+        const x = originX + (u / cols) * receiptWidth;
+        const y = originY - (v / rows) * receiptHeight;
+        const z = originZ;
+        const pinned = v === 0; // 顶部整条固定
+        particles.push(new Particle(x, y, z, pinned));
+      }
+    }
+
+    function addConstraint(u1, v1, u2, v2, stiffness) {
+      const a = particles[idx(u1, v1)];
+      const b = particles[idx(u2, v2)];
+      constraints.push(new Constraint(a, b, a.pos.distanceTo(b.pos), stiffness));
+    }
+
+    for (let v = 0; v <= rows; v++) {
+      for (let u = 0; u <= cols; u++) {
+        if (u < cols) addConstraint(u, v, u + 1, v, 1.0);
+        if (v < rows) addConstraint(u, v, u, v + 1, 0.97);
+
+        if (u < cols && v < rows) {
+          addConstraint(u, v, u + 1, v + 1, 0.72);
+          addConstraint(u + 1, v, u, v + 1, 0.72);
+        }
+
+        if (u < cols - 1) addConstraint(u, v, u + 2, v, 0.42);
+        if (v < rows - 1) addConstraint(u, v, u, v + 2, 0.38);
+      }
+    }
+
+    // ---------------------------
+    // 几何
+    // ---------------------------
+    const positionArray = new Float32Array((cols + 1) * (rows + 1) * 3);
+    const uvArray = new Float32Array((cols + 1) * (rows + 1) * 2);
+    const indexArray = [];
+
+    for (let v = 0; v <= rows; v++) {
+      for (let u = 0; u <= cols; u++) {
+        const i = idx(u, v);
+        const p = particles[i].pos;
+
+        positionArray[i * 3 + 0] = p.x;
+        positionArray[i * 3 + 1] = p.y;
+        positionArray[i * 3 + 2] = p.z;
+
+        uvArray[i * 2 + 0] = u / cols;
+        uvArray[i * 2 + 1] = 1 - v / rows;
+      }
+    }
+
+    for (let v = 0; v < rows; v++) {
+      for (let u = 0; u < cols; u++) {
+        const a = idx(u, v);
+        const b = idx(u + 1, v);
+        const c = idx(u, v + 1);
+        const d = idx(u + 1, v + 1);
+        indexArray.push(a, c, b, b, c, d);
+      }
+    }
+
+    const receiptGeometry = new THREE.BufferGeometry();
+    receiptGeometry.setIndex(indexArray);
+    receiptGeometry.setAttribute("position", new THREE.BufferAttribute(positionArray, 3));
+    receiptGeometry.setAttribute("uv", new THREE.BufferAttribute(uvArray, 2));
+    receiptGeometry.computeVertexNormals();
+
+    const receiptMaterial = new THREE.MeshPhysicalMaterial({
+      map: makeReceiptTexture(),
+      color: 0xfffcf6,
+      side: THREE.DoubleSide,
+      roughness: 0.9,
+      metalness: 0.0,
+      clearcoat: 0.01,
+      clearcoatRoughness: 1.0
+    });
+
+    const receiptMesh = new THREE.Mesh(receiptGeometry, receiptMaterial);
+    receiptMesh.castShadow = true;
+    scene.add(receiptMesh);
+
+    // ---------------------------
+    // 拖拽
+    // ---------------------------
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    const dragPlane = new THREE.Plane();
+    const dragPoint = new THREE.Vector3();
+
+    let dragging = false;
+    let draggedIndex = -1;
+
+    function updateMouse(event) {
+      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    }
+
+    function nearestParticle(worldPoint) {
+      let best = -1;
+      let bestD2 = Infinity;
+      for (let i = 0; i < particles.length; i++) {
+        const d2 = particles[i].pos.distanceToSquared(worldPoint);
+        if (d2 < bestD2) {
+          bestD2 = d2;
+          best = i;
+        }
+      }
+      return best;
+    }
+
+    window.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+
+      updateMouse(event);
+      raycaster.setFromCamera(mouse, camera);
+
+      const hit = raycaster.intersectObject(receiptMesh, false);
+      if (!hit.length) return;
+
+      dragging = true;
+      controls.enabled = false;
+
+      const hitPoint = hit[0].point.clone();
+      draggedIndex = nearestParticle(hitPoint);
+
+      const normal = new THREE.Vector3();
+      camera.getWorldDirection(normal);
+      dragPlane.setFromNormalAndCoplanarPoint(normal, hitPoint);
+    });
+
+    window.addEventListener("pointermove", (event) => {
+      updateMouse(event);
+      if (!dragging) return;
+
+      raycaster.setFromCamera(mouse, camera);
+      raycaster.ray.intersectPlane(dragPlane, dragPoint);
+    });
+
+    window.addEventListener("pointerup", () => {
+      dragging = false;
+      draggedIndex = -1;
+      controls.enabled = true;
+    });
+
+    window.addEventListener("pointercancel", () => {
+      dragging = false;
+      draggedIndex = -1;
+      controls.enabled = true;
+    });
+
+    // ---------------------------
+    // 仿真
+    // ---------------------------
+    const gravity = new THREE.Vector3(0, -9.2, 0);
+    const tmp = new THREE.Vector3();
+
+    const dt = 1 / 60;
+    const dtSq = dt * dt;
+    const damping = 0.992;
+    const solverIterations = 7;
+    const dragRadius = 0.22;
+
+    function simulate() {
+      const time = performance.now() * 0.001;
+
+      // 顶部整条强制固定，绝不允许中间塌陷
+      for (let u = 0; u <= cols; u++) {
+        const p = particles[idx(u, 0)];
+        const x = originX + (u / cols) * receiptWidth;
+        p.pinPos.set(x, originY, originZ);
+        p.pos.copy(p.pinPos);
+        p.prev.copy(p.pinPos);
+      }
+
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        if (p.pinned) continue;
+
+        p.addForce(gravity);
+
+        // 极轻微扰动，让纸更自然
+        const s = Math.sin(time * 1.8 + p.pos.y * 3.0 + p.pos.x * 4.0) * 0.10;
+        p.addForce(tmp.set(0.14 * s, 0, 0.08 * s));
+
+        p.integrate(dtSq, damping);
+      }
+
+      // 局部拖拽，不是只拉一个点
+      if (dragging && draggedIndex >= 0) {
+        const center = particles[draggedIndex].pos;
+        for (let i = 0; i < particles.length; i++) {
+          const p = particles[i];
+          if (p.pinned) continue;
+
+          const dist = p.pos.distanceTo(center);
+          if (dist < dragRadius) {
+            const falloff = 1.0 - dist / dragRadius;
+            const w = falloff * falloff;
+
+            tmp.subVectors(dragPoint, p.pos).multiplyScalar(0.85 * w);
+            p.pos.add(tmp);
+            p.prev.lerp(p.pos, 0.2 * w);
+          }
+        }
+
+        const cp = particles[draggedIndex];
+        cp.pos.lerp(dragPoint, 0.65);
+        cp.prev.lerp(cp.pos, 0.35);
+      }
+
+      for (let iter = 0; iter < solverIterations; iter++) {
+        for (let i = 0; i < constraints.length; i++) {
+          constraints[i].solve();
+        }
+
+        // 每轮都再次锁死顶部整排
+        for (let u = 0; u <= cols; u++) {
+          const p = particles[idx(u, 0)];
+          p.pos.copy(p.pinPos);
+        }
+
+        // 简单地板碰撞
+        for (let i = 0; i < particles.length; i++) {
+          if (particles[i].pos.y < -1.48) {
+            particles[i].pos.y = -1.48;
+          }
+        }
+      }
+    }
+
+    function updateGeometry() {
+      const posAttr = receiptGeometry.attributes.position;
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i].pos;
+        posAttr.array[i * 3 + 0] = p.x;
+        posAttr.array[i * 3 + 1] = p.y;
+        posAttr.array[i * 3 + 2] = p.z;
+      }
+      posAttr.needsUpdate = true;
+      receiptGeometry.computeVertexNormals();
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      simulate();
+      updateGeometry();
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // ---------------------------
+    // resize
+    // ---------------------------
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+    });
+  </script>
+</body>
+</html>
