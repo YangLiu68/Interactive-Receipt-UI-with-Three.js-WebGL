@@ -4,6 +4,9 @@
 
 This project is an interactive 3D receipt UI built with **Three.js** and **WebGL**, designed to simulate the behavior of a real thermal paper receipt rather than a simple flat animation.
 
+![ScreenRecording2026-04-03at4 39 19AM-ezgif com-video-to-gif-converter](https://github.com/user-attachments/assets/96fe4fdb-5970-4ca0-be51-65a29cddc5cb)
+
+
 The receipt is modeled as a particle-based paper surface using **Verlet integration** and a **constraint system**, allowing it to behave like soft paper under user interaction. Users can grab the receipt with the **left mouse button**, drag it around, bend it, fold it, and observe natural motion such as swaying, creasing, and spring-back.
 
 A key requirement of this project is that the **entire top edge remains fully constrained and perfectly straight**, preventing the common “clothesline” sagging effect that often appears in cloth simulations. At the same time, the lower portion of the receipt remains flexible, preserving the lightweight and responsive feel of paper.
